@@ -21,12 +21,17 @@ const removeOldDatas = async () => {
   try {
     const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
     try {
-      const result = await OpenMarketSchema.deleteMany({
-        createdAt: { $lt: threeHoursAgo },
-      });
-      console.log(`Deleted ${result.deletedCount} old documents.`);
+      const result = await Promise.race([
+        OpenMarketSchema.deleteMany({
+          createdAt: { $lt: threeHoursAgo },
+        }),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('MongoDB timeout')), 5000)
+        )
+      ]);
+      // Silently succeed or fail - this is optional cleanup
     } catch (error) {
-      console.error("Error deleting old documents:", error);
+      // Silently fail - MongoDB might be unavailable
     }
   } catch (e) {
     console.log("🚀 ~ SOL price cron job ~ Failed", e);

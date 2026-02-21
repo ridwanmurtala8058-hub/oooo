@@ -1,0 +1,378 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model
+model User {
+  id                    Int       @id @default(autoincrement())
+  chat_id               String    @unique
+  first_name            String
+  last_name             String?
+  username              String    @unique
+  // Phase 0.2: Encrypted private key storage
+  // private_key field should be phased out - use encrypted_private_key instead
+  private_key           String    @unique             // stores plaintext (migrate to encrypted_private_key)
+  encrypted_private_key String?                       // AES-256-GCM encrypted with WALLET_MASTER_KEY
+  wallet_address        String    @unique
+  preset_setting        Int[]     @default([1, 5, 10, 50])
+  nonce                 Int       @default(0)
+  retired               Boolean   @default(false)
+  referrer_code         String?
+  referrer_wallet       String?
+  referral_code         String?                       // Unique code this user can share
+  referral_date         String?
+  schedule              String    @default("60")
+  burn_fee              Boolean   @default(false)
+  auto_buy              Boolean   @default(false)
+  auto_buy_amount       String    @default("0.1")
+  auto_sell_amount      String    @default("30")
+  
+  // Phase 0.3: Security Access PIN (SAP)
+  pin_hash              String?                       // PBKDF2 hashed PIN (100k iterations)
+  pin_salt              String?                       // Random salt for PIN hash
+  pin_attempts          Int       @default(0)        // Brute force protection
+  pin_locked_until      DateTime?                    // Lockout timestamp after 3 failed attempts
+  
+  // Commercial Features: Referral + Fee Split (Phase 1.0)
+  referred_by_user_id   Int?                          // User who referred this user (nullable)
+  referrer              User?                         @relation("ReferralLink", fields: [referred_by_user_id], references: [id])
+  referrals             User[]                        @relation("ReferralLink")
+  referral_balance_usd  Float     @default(0.0)      // Accumulated referral rewards (available for withdrawal)
+  cashback_balance_usd  Float     @default(0.0)      // Accumulated cashback rewards (available for withdrawal)
+  tier                  String    @default("free") // Subscription tier: free | premium | elite | vip
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  trades                Trade[]
+  tradesById            Trade[]   @relation("TradeUserById")
+  positions             Position[]
+  positionsById         Position[]@relation("PositionUserById")
+  msgLogs               MsgLog[]
+  rewardsLedger         RewardsLedger[]
+  subscriptions         Subscription[]
+  payments              Payment[]
+  invoices              Invoice[]
+  auditLogs             AuditLog[]
+  withdrawals           Withdrawal[]
+  
+  @@unique([username, wallet_address, nonce])
+}
+
+// Trade model
+model Trade {
+  id                    Int       @id @default(autoincrement())
+  username              String
+  mint                  String
+  wallet_address        String
+  user                  User      @relation(fields: [wallet_address], references: [wallet_address], onDelete: Cascade)
+  
+  trade_type            Int       @default(0)  // 0=NONE, 1=BUY, 2=SELL, 3=SNIPE
+  sol_amount            Float     @default(0)
+  sol_price             Float     @default(0)
+  spl_amount            Float     @default(0)
+  spl_price             Float     @default(0)
+  nonce                 Int       @default(0)
+  creation_time         BigInt    @default(0)
+  retired               Boolean   @default(false)
+  
+  // Fee split tracking (Phase 1.0)
+  // Idempotency: combination (signature, wallet_address, mint) ensures fees applied once
+  transaction_signature String?                       // Blockchain tx signature (unique per swap)
+  volume_usd            Float?    @default(0.0)      // Total trade volume in USD
+  fee_total_usd         Float?    @default(0.0)      // Total platform fee (1.0% of volume)
+  referral_reward_usd   Float?    @default(0.0)      // 20% of platform fee → referrer
+  cashback_usd          Float?    @default(0.0)      // 5% of platform fee → trader
+  platform_net_usd      Float?    @default(0.0)      // 75% of platform fee → platform
+  fee_status            String    @default("pending") // pending | applied | failed
+  fee_applied_at        DateTime?                    // When fees were applied
+  user_id               Int?
+  user_by_id            User?     @relation("TradeUserById", fields: [user_id], references: [id])
+  created_at            DateTime  @default(now())
+  status                String?   @default("completed") // trade execution status (completed|partial|failed)
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  rewardLedger          RewardsLedger[]              // Associated reward entries
+  
+  @@unique([mint, wallet_address, nonce])
+  @@index([transaction_signature])
+  @@index([fee_status])
+}
+
+// Position model
+model Position {
+  id                    Int       @id @default(autoincrement())
+  mint                  String
+  wallet_address        String
+  user                  User      @relation(fields: [wallet_address], references: [wallet_address], onDelete: Cascade)
+  user_id               Int?
+  user_by_id            User?     @relation("PositionUserById", fields: [user_id], references: [id])
+  token_address         String?
+  token                 Token?    @relation(fields: [token_address], references: [mint])
+  
+  volume                Float     @default(0.0)
+  sol_amount            Float     @default(0.0)
+  received_sol_amount   Float     @default(0.0)
+  amount                Float     @default(0.0)
+  creation_time         BigInt    @default(0)
+  is_closed             Boolean   @default(false)
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+// MsgLog model
+model MsgLog {
+  id                    Int       @id @default(autoincrement())
+  username              String
+  mint                  String?
+  wallet_address        String?
+  user                  User?     @relation(fields: [wallet_address], references: [wallet_address], onDelete: SetNull)
+  
+  chat_id               String
+  msg_id                Int
+  parent_msgid          Int       @default(0)
+  sol_amount            Float     @default(0)
+  spl_amount            Float     @default(0)
+  extra_id              Int?
+  extra_key             String?
+  creation_time         BigInt    @default(0)
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+// Token model
+model Token {
+  id                    Int       @id @default(autoincrement())
+  mint                  String    @unique
+  
+  // AMM Pool Keys
+  ammId                 String?
+  baseMint              String?
+  quoteMint             String?
+  lpMint                String?
+  baseDecimals          Int       @default(0)
+  quoteDecimals         Int       @default(0)
+  lpDecimals            Int       @default(0)
+  version               Int       @default(0)
+  programId             String?
+  authority             String?
+  openOrders            String?
+  targetOrders          String?
+  baseVault             String?
+  quoteVault            String?
+  withdrawQueue         String?
+  lpVault               String?
+  marketVersion         Int       @default(0)
+  marketProgramId       String?
+  marketId              String?
+  marketAuthority       String?
+  marketBaseVault       String?
+  marketQuoteVault      String?
+  marketBids            String?
+  marketAsks            String?
+  marketEventQueue      String?
+  lookupTableAccount    String?
+  
+  // CLMM Config
+  clmmId                String?
+  clmmIndex             Int       @default(0)
+  protocolFeeRate       Float     @default(0)
+  tradeFeeRate          Float     @default(0)
+  tickSpacing           Int       @default(0)
+  fundFeeRate           Float     @default(0)
+  fundOwner             String?
+  description           String?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  positions             Position[]
+}
+
+// OpenMarket model
+model OpenMarket {
+  id                    Int       @id @default(autoincrement())
+  mint                  String    @unique
+  
+  // Market data
+  bids                  String?
+  asks                  String?
+  eventQueue            String?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+// ReferralChannel model
+model ReferralChannel {
+  id                    Int       @id @default(autoincrement())
+  chat_id               String    @unique
+  channel_name          String?
+  creator               String
+  referral_code         String    @unique
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+// Phase 1.0: Commercial Referral + Fee Split Models
+
+// RewardsLedger: Immutable audit trail of all reward events
+model RewardsLedger {
+  id                    Int       @id @default(autoincrement())
+  user_id               Int                           // Recipient of reward
+  user                  User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  trade_id              Int?                          // Source trade (optional)
+  trade                 Trade?    @relation(fields: [trade_id], references: [id], onDelete: Cascade)
+  
+  reward_type           String                        // "referral" | "cashback"
+  amount_usd            Float                         // Exact reward amount
+  status                String    @default("available") // available | withdrawn | pending
+  withdrawn_by_id       Int?                          // Withdrawal record ID (if withdrawn)
+  description           String?
+  metadata              Json?
+  expires_at            DateTime?
+  
+  created_at            DateTime  @default(now())
+  recorded_at           DateTime  @default(now())
+  withdrawn_at          DateTime?
+  
+  @@index([user_id])
+  @@index([trade_id])
+  @@index([status])
+}
+
+// Withdrawal: Track withdrawal requests and payments
+model Withdrawal {
+  id                    Int       @id @default(autoincrement())
+  user_id               Int
+  user                  User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  
+  withdrawal_type       String                        // "referral" | "cashback"
+  amount_usd            Float                         // Total amount to withdraw
+  destination_wallet    String                        // Recipient wallet address
+  
+  status                String    @default("pending") // pending | paid | failed
+  transaction_signature String?                       // On-chain tx signature (if paid)
+  error_reason          String?                       // Failure reason (if failed)
+  payment_method        String    @default("onchain") // onchain | manual (admin payout)
+  
+  requested_at          DateTime  @default(now())
+  paid_at               DateTime?
+  
+  @@index([user_id])
+  @@index([status])
+}
+// ReferralHistory model
+model ReferralHistory {
+  id                    Int       @id @default(autoincrement())
+  username              String
+  uniquecode            String
+  referrer_address      String
+  amount                Float     @default(0)
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+// ReferrerList model
+model ReferrerList {
+  id                    Int       @id @default(autoincrement())
+  chatId                String
+  messageId             String
+  referrer              String
+  channelName           String
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+// Subscription model (Phase 1.0)
+model Subscription {
+  id                    Int       @id @default(autoincrement())
+  user_id               Int       @unique
+  user                  User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  current_tier          String
+  subscribed_at         DateTime  @default(now())
+  next_billing_date     DateTime?
+  auto_renew            Boolean   @default(true)
+  payment_method        String?
+  cancelled_at          DateTime?
+  cancellation_reason   String?
+  payment_retry_count   Int       @default(0)
+  last_billing_date     DateTime?
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+// Payment model
+model Payment {
+  id                    Int       @id @default(autoincrement())
+  user_id               Int
+  user                  User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  amount                Float
+  currency              String
+  tier                  String
+  status                String
+  invoice_id            String?
+  transaction_id        String?
+  processed_at          DateTime?
+  refunded_at           DateTime?
+  refund_reason         String?
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+// Invoice model
+model Invoice {
+  id                    Int       @id @default(autoincrement())
+  invoice_id            String    @unique
+  user_id               Int
+  user                  User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  amount                Float
+  currency              String
+  tier                  String
+  billing_period_start  DateTime
+  billing_period_end    DateTime
+  status                String
+  issued_at             DateTime
+  due_date              DateTime
+  paid_at               DateTime?
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+// Audit log model
+model AuditLog {
+  id                    Int       @id @default(autoincrement())
+  user_id               Int?
+  user                  User?     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  action                String
+  category              String
+  details               Json
+  ip_address            String?
+  user_agent            String?
+  severity              String    @default("low")
+  timestamp             DateTime  @default(now())
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}

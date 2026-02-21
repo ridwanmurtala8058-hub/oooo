@@ -38,7 +38,7 @@ import { copytoclipboard, fromWeiToValue } from "../utils";
 import bs58 from "bs58";
 import {
   RAYDIUM_PASS_TIME,
-  RESERVE_WALLET,
+  FEE_WALLET_ADDRESS,
   connection,
   private_connection,
 } from "../config";
@@ -955,6 +955,10 @@ export const feeHandler = async (
     const wallet = Keypair.fromSecretKey(bs58.decode(pk));
     let ref_info = await get_referral_info(username);
     console.log("🚀 ~ ref_info:", ref_info);
+    
+    // Use FEE_WALLET_ADDRESS from config
+    const feeWallet = new PublicKey(FEE_WALLET_ADDRESS || "11111111111111111111111111111111");
+    
     let referralWallet;
     if (ref_info?.referral_address) {
       console.log(
@@ -963,7 +967,7 @@ export const feeHandler = async (
       );
       referralWallet = new PublicKey(ref_info?.referral_address);
     } else {
-      referralWallet = RESERVE_WALLET;
+      referralWallet = feeWallet;
     }
 
     console.log("🚀 ~ referralWallet:", referralWallet.toString());
@@ -986,7 +990,7 @@ export const feeHandler = async (
       instructions.push(
         SystemProgram.transfer({
           fromPubkey: wallet.publicKey,
-          toPubkey: RESERVE_WALLET,
+          toPubkey: feeWallet, // Use FEE_WALLET_ADDRESS instead of RESERVE_WALLET
           lamports: reserverStakingFee,
         })
       );

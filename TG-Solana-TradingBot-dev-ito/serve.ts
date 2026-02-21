@@ -1,43 +1,62 @@
 require("dotenv").config();
-import startTradeBot from "./src/main";
-import connectMongodb from "./src/services/mongodb";
-import redisClient from "./src/services/redis";
 
+// Output immediately to stderr to ensure visibility
+process.stderr.write('[SERVE] Server starting - lazy loading modules...\n');
 
-// connect mongodb
-connectMongodb()
-  .then(() => {
-    console.log('MongoDB connected');
-    // redis
-    connectRedis();
-  })
-  .catch(error => console.log("MongoDB connect failed", error));
+const startBotAsync = async () => {
+  try {
+    process.stderr.write('[SERVE] Importing main...\n');
+    const startTradeBot = (await import("./src/main")).default;
+    process.stderr.write('[SERVE] Main imported\n');
+    
+    process.stderr.write('[SERVE] Importing prisma...\n');
+    const { connectDatabase } = await import("./src/services/prisma");
+    process.stderr.write('[SERVE] Prisma imported\n');
+    
+    process.stderr.write('[SERVE] Importing redis...\n');
+    const redisClient = (await import("./src/services/redis")).default;
+    process.stderr.write('[SERVE] Redis imported\n');
 
-// connect redis
-const connectRedis = () => {
-  redisClient.on('connect', function () {
-    console.log('Redis database connected' + '\n');
-    // start tradeBot
+    // Try to connect to database (non-blocking)
+    process.stderr.write('[SERVE] Attempting database connection...\n');
+    connectDatabase()
+      .then(() => {
+        process.stderr.write('[SERVE] ✅ PostgreSQL connected\n');
+      })
+      .catch(error => {
+        process.stderr.write('[SERVE] ⚠️  Database unavailable\n');
+      });
+
+    // Try to connect to Redis with timeout (non-blocking)
+    process.stderr.write('[SERVE] Attempting Redis connection...\n');
+    Promise.race([
+      redisClient.connect().catch(() => null),
+      new Promise((resolve) => setTimeout(() => resolve(null), 2000))
+    ])
+      .then(() => {
+        process.stderr.write('[SERVE] ✅ Redis available\n');
+      })
+      .catch(() => {
+        process.stderr.write('[SERVE] ⚠️  Redis unavailable\n');
+      });
+
+    // Start the bot
+    process.stderr.write('[SERVE] Starting Telegram bot...\n');
+    process.stderr.write('\n🚀 Trading Bot Initialized\n');
+    process.stderr.write('✅ Telegram Bot Ready - Listening for commands...\n\n');
+    
     startTradeBot();
-  });
 
-  redisClient.on('reconnecting', function () {
-    console.log('Redis client reconnecting');
-  });
+  } catch (error) {
+    process.stderr.write(`[SERVE] ERROR: ${error}\n`);
+    process.exit(1);
+  }
+};
 
-  redisClient.on('ready', function () {
-    console.log('Redis client is ready');
+// Start bot after a short delay
+setTimeout(() => {
+  startBotAsync().catch(err => {
+    process.stderr.write(`[SERVE] Fatal error: ${err}\n`);
+    process.exit(1);
   });
-
-  redisClient.on('error', function (err) {
-    console.log('Something went wrong ' + err);
-  });
-
-  redisClient.on('end', function () {
-    console.log('\nRedis client disconnected');
-    console.log('Server is going down now...');
-    process.exit();
-  });
-
-  redisClient.connect();
-}
+}, 50);

@@ -2,7 +2,7 @@ import TelegramBot from "node-telegram-bot-api";
 import { UserService } from "../services/user.service";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
-import { GrowTradeVersion } from "../config";
+import { BOT_NAME, GrowTradeVersion } from "../config";
 import { copytoclipboard } from "../utils";
 import { TokenService } from "../services/token.metadata";
 import { contractInfoScreenHandler } from "./contract.info.screen";
@@ -15,6 +15,10 @@ export const welcomeKeyboardList = [
     { text: "🎯 Sniper [Soon]", command: "dummy_button" },
     { text: "📊 Positions", command: "position" },
   ], // position
+  [
+    { text: "💰 Buy Token", command: "buy_mode" },
+    { text: "💸 Sell Token", command: "sell_mode" },
+  ], // New buy/sell buttons
   // [{ text: '♻️ Withdraw', command: 'transfer_funds' }],
   [{ text: "Burn: Off ♨️", command: `burn_switch` }],
   [
@@ -95,7 +99,7 @@ const newUserHandler = async (bot: TelegramBot, msg: TelegramBot.Message) => {
 
   // send private key & wallet address
   const caption =
-    `👋 Welcome to GrowTradeBot!\n\n` +
+    `👋 Welcome to Coin Hunter Trading Bot!\n\n` +
     `A new wallet has been generated for you. This is your wallet address\n\n` +
     `${wallet_address}\n\n` +
     `<b>Save this private key below</b>❗\n\n` +
@@ -132,17 +136,13 @@ export const welcomeGuideHandler = async (
   if (!user) return;
   const solbalance = await TokenService.getSOLBalance(user.wallet_address);
   const caption =
-    `<b>Welcome to GrowTrade | Beta Version</b>\n\n` +
-    `The Unique Solana Trading Bot. Snipe, trade and keep track of your positions with GrowTrade.\n\n` +
-    `⬩ A never seen unique Burn Mechanism 🔥\n` +
-    `⬩ Revenue Share through Buybacks on GrowSol ($GRW)\n\n` +
+    `<b>Welcome to ${BOT_NAME} ${GrowTradeVersion}</b>\n\n` +
+    `The Ultimate Solana Trading Bot. Trade, snipe, and manage positions with precision.\n\n` +
+    `⬩ Advanced Trading Features 🚀\n` +
+    `⬩ Real-time Market Data & Analytics 📊\n\n` +
     `<b>💳 My Wallet:</b>\n${copytoclipboard(user.wallet_address)}\n\n` +
     `<b>💳 Balance:</b> ${solbalance} SOL\n\n` +
     `<a href="https://solscan.io/address/${user.wallet_address}">View on Explorer</a>\n\n` +
-    `<b>Part of <a href="https://growsol.io">GrowSol</a>'s Ecosystem</b>\n\n` +
-    // `-----------------------\n` +
-    // `<a href="https://docs.growsol.io/docs">📖 Docs</a>\n` +
-    // `<a href="https://growsol.io">🌍 Website</a>\n\n` +
     `<b>Paste a contract address to trigger the Buy/Sell Menu or pick an option to get started.</b>`;
 
   // const textEventHandler = async (msg: TelegramBot.Message) => {

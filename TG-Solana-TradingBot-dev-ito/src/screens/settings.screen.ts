@@ -56,7 +56,7 @@ export const settingScreenHandler = async (
     const { wallet_address, auto_buy, auto_buy_amount } = user;
 
     const caption =
-      `<b>GrowTrade ${GrowTradeVersion}</b>\n\n` +
+      `<b>Coin Hunter Trading Bot ${GrowTradeVersion}</b>\n\n` +
       `<b>AutoBuy</b>\n` +
       `Automatically execute buys upon pasting token address. Customize the Sol amount and press the button to activate/deactivate.\n\n` +
       `<b>Withdraw</b>\n` +
@@ -236,11 +236,11 @@ export const walletViewHandler = async (
     }
 
     const users = await UserService.findAndSort({ username });
-    const activeuser = users.filter((user) => user.retired === false)[0];
+    const activeuser = users.filter((user: any) => user.retired === false)[0];
     const { wallet_address } = activeuser;
 
     const caption =
-      `<b>GrowTrade ${GrowTradeVersion}</b>\n\n<b>Your active wallet:</b>\n` +
+      `<b>Coin Hunter Trading Bot ${GrowTradeVersion}</b>\n\n<b>Your active wallet:</b>\n` +
       `${copytoclipboard(wallet_address)}`;
     // const sentMessage = await bot.sendMessage(
     // chat_id,
@@ -253,7 +253,7 @@ export const walletViewHandler = async (
       disable_web_page_preview: true,
       reply_markup: {
         inline_keyboard: [
-          ...users.map((user) => {
+          ...users.map((user: any) => {
             const { nonce, wallet_address, retired } = user;
             return [
               {

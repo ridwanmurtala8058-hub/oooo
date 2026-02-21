@@ -2,7 +2,7 @@ import { ASSOCIATED_TOKEN_PROGRAM_ID, Account, NATIVE_MINT, TOKEN_2022_PROGRAM_I
 import { ComputeBudgetProgram, Keypair, PublicKey, SystemProgram, TransactionInstruction, VersionedTransaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { QuoteGetRequest, SwapRequest, createJupiterApiClient } from '@jup-ag/api';
 import bs58 from "bs58";
-import { COMMITMENT_LEVEL, RESERVE_WALLET, connection } from "../config";
+import { COMMITMENT_LEVEL, FEE_WALLET_ADDRESS, connection } from "../config";
 import { transactionSenderAndConfirmationWaiter } from "../utils/jupiter.transaction.sender";
 import { getSignature } from "../utils/get.signature";
 import { sendTransactionV0 } from "../utils/v0.transaction";
@@ -38,10 +38,7 @@ export const JupiterService = {
       const amount = Number(((_amount - fee) * 10 ** decimal).toFixed(0));
       const wallet = Keypair.fromSecretKey(bs58.decode(pk));
 
-      // const config = {
-      //   basePath: "https://growtradebot.fly.dev"
-      // }
-      // const jupiterQuoteApi = createJupiterApiClient(config);
+      // Jupiter API v6 - Initialize with default configuration
       const jupiterQuoteApi = createJupiterApiClient();
       const quotegetOpts: QuoteGetRequest = {
         inputMint,
@@ -264,7 +261,7 @@ export const JupiterService = {
             }),
             SystemProgram.transfer({
               fromPubkey: wallet.publicKey,
-              toPubkey: RESERVE_WALLET,
+              toPubkey: new PublicKey(FEE_WALLET_ADDRESS || "11111111111111111111111111111111"), // Use FEE_WALLET_ADDRESS
               lamports: amount,
             })
           ],

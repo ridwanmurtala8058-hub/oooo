@@ -201,7 +201,7 @@ export const TokenService = {
         if (token.json && token.json.extensions) {
           website = (token.json.extensions as any).website ?? "";
           twitter = (token.json.extensions as any).twitter ?? "";
-          telegram = (token.json.extensions as any).twitter ?? "";
+          telegram = (token.json.extensions as any).telegram ?? "";
         }
       }
       await redisClient.set(key, JSON.stringify({

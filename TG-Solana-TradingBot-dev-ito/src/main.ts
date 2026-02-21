@@ -22,9 +22,9 @@ import {
   ReferralPlatform,
 } from "./services/referral.channel.service";
 import { ReferrerListService } from "./services/referrer.list.service";
-import { runListener } from "./raydium";
 import { wait } from "./utils/wait";
 import { runOpenmarketCronSchedule } from "./cron/remove.openmarket.cron";
+// NOTE: runListener is lazy-loaded to avoid blocking startup on Solana RPC connection
 
 const token = TELEGRAM_BOT_API_TOKEN;
 
@@ -42,39 +42,97 @@ export interface ReferralIdenticalType {
 }
 
 const startTradeBot = () => {
+  process.stderr.write('[BOT] Creating Telegram bot instance...\n');
   const bot = new TelegramBot(token, { polling: true });
-  //
-  runOpenmarketCronSchedule();
-  // Listen Raydium POOL creation
-  runListener();
-  // bot menu
-  runAlertBotSchedule();
-  // Later: runAlertBotForChannel();
-  runSOLPriceUpdateSchedule();
+  
+  process.stderr.write('[BOT] Setting up error handlers...\n');
+  bot.on('polling_error', (err: any) => {
+    process.stderr.write(`[BOT] Polling error: ${err?.message}\n`);
+    // Handle Telegram 409 Conflict (another getUpdates request)
+    const is409 = err?.response?.statusCode === 409 || err?.code === 409 || (err?.message && err.message.includes('409')) || (err?.message && err.message.includes('terminated by other getUpdates'));
+    if (is409) {
+      process.stderr.write('[BOT] Detected 409 Conflict (another getUpdates). Stopping polling and attempting backoff restart.\n');
+      try {
+        (bot as any).stopPolling();
+      } catch (e) {}
+
+      let retryInterval = 60 * 1000; // 1 minute
+      const maxInterval = 30 * 60 * 1000; // 30 minutes
+
+      const attemptRestart = () => {
+        process.stderr.write(`[BOT] Attempting to restart polling in ${Math.round(retryInterval/1000)}s...\n`);
+        setTimeout(() => {
+          try {
+            (bot as any).startPolling();
+            process.stderr.write('[BOT] Polling restarted\n');
+          } catch (e: any) {
+            process.stderr.write(`[BOT] Restart failed: ${e?.message ?? e}\n`);
+            retryInterval = Math.min(maxInterval, retryInterval * 2);
+            attemptRestart();
+          }
+        }, retryInterval);
+      };
+
+      attemptRestart();
+    }
+  });
+
+  (bot as any).on('error', (err: any) => {
+    process.stderr.write(`[BOT] Bot error: ${err.message}\n`);
+  });
+  
+  process.stderr.write('[BOT] Initializing bot...\n');
   bot.setMyCommands(BotMenu);
 
-  // bot callback
-  bot.on(
-    "callback_query",
-    async function onCallbackQuery(callbackQuery: TelegramBot.CallbackQuery) {
-      callbackQueryHandler(bot, callbackQuery);
+  // Background services - start asynchronously
+  setTimeout(() => {
+    try {
+      runOpenmarketCronSchedule();
+    } catch (e) {
+      console.warn('OpenMarket cron issue:', e);
     }
-  );
+  }, 300);
 
-  // bot message
-  bot.on("message", async (msg: TelegramBot.Message) => {
+  setTimeout(() => {
+    try {
+      runSOLPriceUpdateSchedule();
+    } catch (e) {
+      console.warn('SOL price cron issue:', e);
+    }
+  }, 600);
+
+  setTimeout(() => {
+    try {
+      // Lazy load Raydium listener - this creates web socket connections
+      import("./raydium").then(({ runListener }) => {
+        runListener().catch((e) => {
+          console.warn('Raydium listener issue:', e);
+        });
+      }).catch((e) => {
+        console.warn('Failed to load Raydium:', e);
+      });
+    } catch (e) {
+      console.warn('Raydium issue:', e);
+    }
+  }, 1000);
+
+  runAlertBotSchedule();
+
+  // Bot event handlers
+  bot.on('callback_query', async (callbackQuery: TelegramBot.CallbackQuery) => {
+    callbackQueryHandler(bot, callbackQuery);
+  });
+
+  bot.on('message', async (msg: TelegramBot.Message) => {
     messageHandler(bot, msg);
   });
 
-  // bot commands
+  // Bot commands
   bot.onText(/\/start/, async (msg: TelegramBot.Message) => {
-    // Need to remove "/start" text
     bot.deleteMessage(msg.chat.id, msg.message_id);
-
     await WelcomeScreenHandler(bot, msg);
     const referralcode = UserService.extractUniqueCode(msg.text ?? "");
     if (referralcode && referralcode !== "") {
-      // store info
       const chat = msg.chat;
       if (chat.username) {
         const data = await UserService.findLastOne({ username: chat.username });
@@ -89,6 +147,7 @@ const startTradeBot = () => {
       }
     }
   });
+
   bot.onText(/\/position/, async (msg: TelegramBot.Message) => {
     await positionScreenHandler(bot, msg);
   });
@@ -97,70 +156,64 @@ const startTradeBot = () => {
     await settingScreenHandler(bot, msg);
   });
 
-  alertBot.onText(/\/start/, async (msg: TelegramBot.Message) => {
-    const { from, chat, text, message_id } = msg;
-    console.log("AlertBotStart", `/start@${AlertBotID}`);
-    if (text && text.includes(`/start@${AlertBotID}`)) {
-      console.log("AlertBotStart Delete", Date.now());
-      await wait(3000);
-      console.log("AlertBotStart Delete", Date.now());
+  // Alert bot handlers
+  if (alertBot) {
+    const alertBotInstance = alertBot;
+    
+    alertBotInstance.onText(/\/start/, async (msg: TelegramBot.Message) => {
+      const { from, chat, text, message_id } = msg;
+      if (text && text.includes(`/start@${AlertBotID}`)) {
+        try {
+          await wait(3000);
+          await alertBotInstance.deleteMessage(chat.id, message_id);
+        } catch (e) {}
+        
+        if (!from || !text.includes(" ")) return;
+        const referrerInfo = await ReferrerListService.findLastOne({
+          referrer: from.username,
+          chatId: chat.id.toString(),
+        });
+        if (!referrerInfo) return;
+        
+        const { referrer, chatId, channelName } = referrerInfo;
+        const parts = text.split(" ");
+        if (parts.length < 2 || parts[0] !== `/start@${AlertBotID}`) return;
+        
+        const botType = parts[1];
+        const referralChannelService = new ReferralChannelService();
+        
+        if (botType === "tradebot") {
+          await referralChannelService.addReferralChannel({
+            creator: referrer,
+            platform: ReferralPlatform.TradeBot,
+            chat_id: chatId,
+            channel_name: channelName,
+          });
+        } else if (botType === "bridgebot") {
+          await referralChannelService.addReferralChannel({
+            creator: referrer,
+            platform: ReferralPlatform.BridgeBot,
+            chat_id: chatId,
+            channel_name: channelName,
+          });
+        }
+      }
+    });
 
+    alertBotInstance.on('new_chat_members', async (msg: TelegramBot.Message) => {
+      const data = await newReferralChannelHandler(msg);
+      if (!data) return;
       try {
-        alertBot.deleteMessage(chat.id, message_id);
+        await ReferrerListService.create(data);
       } catch (e) {}
-      if (!from) return;
-      if (!text.includes(" ")) return;
-      const referrerInfo = await ReferrerListService.findLastOne({
-        referrer: from.username,
-        chatId: chat.id.toString(),
-      });
-      if (!referrerInfo) return;
-      // for (const referrerInfo of referrerList) {
-      const { referrer, chatId, channelName } = referrerInfo;
-      // if (referrer === from.username && chat.id.toString() === chatId) {
-      const parts = text.split(" ");
-      if (parts.length < 1) {
-        return;
-      }
-      if (parts[0] !== `/start@${AlertBotID}`) {
-        return;
-      }
-      const botType = parts[1];
-      if (botType === "tradebot") {
-        const referralChannelService = new ReferralChannelService();
-        await referralChannelService.addReferralChannel({
-          creator: referrer,
-          platform: ReferralPlatform.TradeBot,
-          chat_id: chatId,
-          channel_name: channelName,
-        });
-      } else if (botType === "bridgebot") {
-        const referralChannelService = new ReferralChannelService();
-        await referralChannelService.addReferralChannel({
-          creator: referrer,
-          platform: ReferralPlatform.BridgeBot,
-          chat_id: chatId,
-          channel_name: channelName,
-        });
-      }
-      // }
-      // }
-    }
-  });
-  alertBot.on("new_chat_members", async (msg: TelegramBot.Message) => {
-    console.log("new Members", msg);
-    const data = await newReferralChannelHandler(msg);
-    if (!data) return;
+    });
 
-    try {
-      console.log("New member created");
-      await ReferrerListService.create(data);
-      console.log("New member added ended");
-    } catch (e) {}
-  });
-  alertBot.on("left_chat_member", async (msg: TelegramBot.Message) => {
-    await removeReferralChannelHandler(msg);
-  });
+    alertBotInstance.on('left_chat_member', async (msg: TelegramBot.Message) => {
+      await removeReferralChannelHandler(msg);
+    });
+  }
+
+  process.stderr.write('✅ Telegram Bot Ready\n');
 };
 
 export default startTradeBot;

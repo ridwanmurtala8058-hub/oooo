@@ -3,7 +3,7 @@ import { AddressLookupTableAccount, ComputeBudgetProgram, Connection, Keypair, P
 import { AccountMeta, Instruction, QuoteGetRequest, SwapInstructionsResponse, SwapRequest, createJupiterApiClient } from '@jup-ag/api';
 import bs58 from "bs58";
 // import { ReferralProvider } from "@jup-ag/referral-sdk";
-import { COMMITMENT_LEVEL, RESERVE_WALLET, connection } from "../config";
+import { COMMITMENT_LEVEL, FEE_WALLET_ADDRESS, connection } from "../config";
 // import { transactionSenderAndConfirmationWaiter } from "../utils/jupiter.transaction.sender";
 import { getSignature } from "../utils/get.signature";
 // import { GasFeeEnum, UserTradeSettingService } from "./user.trade.setting.service";
@@ -17,9 +17,9 @@ import { UserTradeSettingService } from "./user.trade.setting.service";
 
 // const provider = new ReferralProvider(connection);
 
-const config = {
-  basePath: "https://growtradebot.fly.dev"
-}
+// Jupiter API v6 Configuration
+const JUPITER_API_V6_URL = "https://api.jup.ag/price/v1";
+const JUPITER_QUOTE_API_V6_URL = "https://quote-api.jup.ag/v6";
 
 let jupiterTradeableTokens: Array<string> = [];
 export class JupiterService {
@@ -71,17 +71,18 @@ export class JupiterService {
       return JSON.parse(res) as boolean;
     }
 
-    const config = {
-      basePath: "https://growtradebot.fly.dev"
+    try {
+      const jupiterQuoteApi = createJupiterApiClient();
+      const tokens = await jupiterQuoteApi.tokensGet();
+      jupiterTradeableTokens = tokens;
+      const tradeable = tokens.includes(mint);
+      await redisClient.set(key, JSON.stringify(tradeable));
+      await redisClient.expire(key, 30);
+      return tradeable;
+    } catch (error) {
+      console.error('Error checking Jupiter tradability:', error);
+      return false;
     }
-    const jupiterQuoteApi = createJupiterApiClient(config);
-    const tokens = await jupiterQuoteApi.tokensGet();
-    jupiterTradeableTokens = tokens;
-    const tradeable = tokens.includes(mint);
-    await redisClient.set(key, JSON.stringify(tradeable));
-    await redisClient.expire(key, 30);
-
-    return tradeable;
   };
   async swapToken(
     pk: string,
@@ -120,11 +121,8 @@ export class JupiterService {
       const amount = Number(((_amount - fee) * 10 ** decimal).toFixed(0));
       const wallet = Keypair.fromSecretKey(bs58.decode(pk));
 
-      const config = {
-        basePath: "https://growtradebot.fly.dev"
-      }
-      const jupiterQuoteApi = createJupiterApiClient(config);
-      // const jupiterQuoteApi = createJupiterApiClient();
+      // Jupiter API v6 - Use default public API endpoint
+      const jupiterQuoteApi = createJupiterApiClient();
       const quotegetOpts: QuoteGetRequest = {
         inputMint,
         outputMint,
@@ -271,9 +269,8 @@ export class JupiterService {
     try {
       if (inputAmount < 0.000001) return null;
 
-      const jupiterQuoteApi = createJupiterApiClient(config);
+      const jupiterQuoteApi = createJupiterApiClient();
       const amount = Number((inputAmount * (10 ** inDecimal)).toFixed(0));
-      // const jupiterQuoteApi = createJupiterApiClient();
       const quotegetOpts: QuoteGetRequest = {
         inputMint,
         outputMint,
@@ -422,7 +419,7 @@ export class JupiterService {
             }),
             SystemProgram.transfer({
               fromPubkey: wallet.publicKey,
-              toPubkey: RESERVE_WALLET,
+              toPubkey: new PublicKey(FEE_WALLET_ADDRESS || "11111111111111111111111111111111"), // Use FEE_WALLET_ADDRESS
               lamports: amount,
             })
           ],

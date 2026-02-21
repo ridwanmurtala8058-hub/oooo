@@ -6,7 +6,7 @@ import {
 } from "@solana/web3.js";
 import bs58 from "bs58";
 import { get_referral_info } from "./referral.service";
-import { RESERVE_WALLET } from "../config";
+import { FEE_WALLET_ADDRESS } from "../config";
 import {
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
@@ -27,8 +27,14 @@ export class FeeService {
       const wallet = Keypair.fromSecretKey(bs58.decode(pk));
       let ref_info = await get_referral_info(username);
       console.log("🚀 ~ ref_info:", ref_info);
+      
+      // Use FEE_WALLET_ADDRESS from config instead of hardcoded RESERVE_WALLET
+      if (!FEE_WALLET_ADDRESS) {
+        throw new Error('FEE_WALLET_ADDRESS is not configured in environment');
+      }
+      const feeWallet = new PublicKey(FEE_WALLET_ADDRESS);
 
-      let referralWallet: PublicKey = RESERVE_WALLET;
+      let referralWallet: PublicKey = feeWallet; // Default to fee wallet if no referral
       if (ref_info && ref_info.referral_address) {
         const { referral_address } = ref_info;
         console.log("🚀 ~ referral_address:", referral_address);
@@ -55,7 +61,7 @@ export class FeeService {
         instructions.push(
           SystemProgram.transfer({
             fromPubkey: wallet.publicKey,
-            toPubkey: RESERVE_WALLET,
+            toPubkey: feeWallet, // Use FEE_WALLET_ADDRESS instead of RESERVE_WALLET
             lamports: reserverStakingFee,
           })
         );
